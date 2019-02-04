@@ -149,12 +149,12 @@ class _Interpreter:
 class _Runner:
 
     class CPU(bdb.Bdb):
-
-        def user_line(self, frame):
-            # Stop running user code
-            if not self.board.keep_user_script_running:
-                raise bdb.BdbQuit
-            # print('FRAME: ', frame.f_code)
+        # def user_line(self, frame):
+        #     # Stop running user code
+        #     if not self.board.keep_user_script_running:
+        #         raise bdb.BdbQuit
+        #     # print('FRAME: ', frame.f_code)
+        pass
 
     def __init__(self, glo=None):
         self.globals = glo
@@ -165,7 +165,8 @@ class _Runner:
         with open(main_filename) as f:
             statement = 'exec(%r)' % f.read()
 
-        statement += '\nimport time\nwhile _board.keep_user_script_running: time.sleep(1)'
+        statement += '\nimport time' \
+                     '\nwhile _board.keep_user_script_running: time.sleep(1)'
 
         cpu = self.CPU()
         cpu.board = self.globals['_board']
@@ -180,10 +181,12 @@ class _Runner:
 
 class _Accel:
 
+    @property
     def x(self):
         sys.stderr.write("ACCEL: x\n")
         return randint(0, 10)
 
+    @property
     def y(self):
         sys.stderr.write("ACCEL: y\n")
         return randint(0, 10)
@@ -197,6 +200,9 @@ class _LCD:
         self.skin_position = None
         self._buffer = None
         self._hidden_buffer = {}
+
+        self.backlight = None
+        self.contrast_value = None
 
     def __call__(self, skin_position):
         self.skin_position = skin_position
@@ -213,7 +219,8 @@ class _LCD:
 
         """
         sys.stderr.write("LCD:command: %s %s\n" % (instr_data, buf))
-        raise NotImplementedError("Contribute on github.com/alej0varas/pybolator")
+        raise NotImplementedError(
+            "Contribute on github.com/alej0varas/pybolator")
 
     def contrast(self, value):
         sys.stderr.write("LCD:contrast: %s\n" % value)
@@ -250,6 +257,7 @@ class _LCD:
         txt = figlet.renderText(text)
         dx = 0
         dy = 0
+        color = 0
         for item in txt:
             if item == ' ':
                 color = int(not bool(colour))
@@ -275,6 +283,10 @@ class _LCD:
 
 
 class _LED:
+
+    # Values in percentage
+    _intensity_min = 0
+    _intensity_max = 100
 
     def __init__(self, color):
         self._intensity = 0
@@ -311,19 +323,19 @@ class _Switch:
         self._callable = callable
 
     def __call__(self):
-        sys.stderr.write("SWITCH %s call > %s:\n" % (self._name, self._pressed))
+        sys.stderr.write("SWITCH {} call > {}:\n".format(self._name, self._pressed))
         return self._pressed
 
     def callback(self, callable):
-        sys.stderr.write("SWITCH %s: callback %s\n" % (self._name, callable))
+        sys.stderr.write("SWITCH {}: callback {}\n".format(self._name, callable))
         self._callable = callable
 
     def _press(self):
-        sys.stderr.write("SWITCH %s: pressed\n" % self._name)
+        sys.stderr.write("SWITCH {}: pressed\n".format(self._name))
         self._pressed = True
 
     def _release(self):
-        sys.stderr.write("SWITCH %s: released\n" % self._name)
+        sys.stderr.write("SWITCH {}: released\n".format(self._name))
         self._pressed = False
 
     def _update(self):
@@ -364,9 +376,175 @@ def ExtInt(pin, mode, pull, callback):
     raise NotImplementedError("Contribute on github.com/alej0varas/pybolator")
 
 
-def I2C(bus):
+class I2C():
     """http://docs.micropython.org/en/latest/library/pyb.I2C.html"""
-    raise NotImplementedError("Contribute on github.com/alej0varas/pybolator")
+
+    MASTER = 0
+    SLAVE = 1
+
+    def __init__(self, bus):
+        self._bus = bus
+
+        # Pyboard connections
+        if bus == 1:
+            self._scl_pin_number = 'X9'
+            self._sda_pin_number = 'X10'
+
+            pass
+        elif bus == 2:
+            self._scl_pin_number = 'Y9'
+            self._sda_pin_number = 'Y10'
+            pass
+
+        self._scl_pin = _Pin(self._scl_pin_number)
+        self._sda_pin = _Pin(self._sda_pin_number)
+
+        # Parameters
+        self._mode = None
+        self._addr = None
+        self._baudrate = None
+        self._gencall = None
+        self._dma = None
+
+    def deinit(self):
+        """Turn off the I2C bus."""
+        # Todo
+        raise NotImplementedError(
+            "Contribute on github.com/alej0varas/pybolator")
+
+    def init(self, mode, addr=0x12, baudrate=400000, gencall=False, dma=False):
+        """
+
+        Parameters
+        ----------
+        mode: str
+            Must be either I2C.MASTER or I2C.SLAVE
+        addr: str
+            Only sensible for a slave.
+            Optional, defaults to 0x12.
+        baudrate: int
+            SCL clock rate (only sensible for a master)
+            Optional, defaults to 400000.
+        gencall: bool
+            Whether to support general call mode.
+            Optional, defaults to False.
+        dma: bool
+            Whether to allow the use of DMA for the I2C transfers
+            (note that DMA transfers have more precise timing but
+            currently do not handle bus errors properly)
+        """
+        if self._mode in [self.MASTER, self.SLAVE]:
+            self._mode = mode
+        else:
+            raise AttributeError('Must be either MASTER or Slave')
+
+        self._addr = addr
+        self._baudrate = baudrate
+        self._gencall = gencall
+        self._dma = dma
+
+    def is_ready(self, addr):
+        """Check if an I2C device responds to the given address.
+
+        Only valid when in master mode.
+
+        Parameters
+        ----------
+        addr : str
+            I2C address (in hexadecimal) to be investigated.
+
+        Returns
+        -------
+        out: bool
+            True, if an I2C device responds to the given address.
+            False, otherwise
+        """
+        # Todo: Other criterion?
+        if self._addr == addr:
+            return True
+        else:
+            return False
+
+    def mem_read(self):
+        # Todo
+        raise NotImplementedError(
+            "Contribute on github.com/alej0varas/pybolator")
+
+    def mem_write(self):
+        # Todo
+        raise NotImplementedError(
+            "Contribute on github.com/alej0varas/pybolator")
+
+    def recv(self, recv, addr=0x00, timeout=5000):
+        """
+
+        Parameters
+        ----------
+        recv: int, bytearray
+            Can be:
+                an integer, which is the number of bytes to receive
+                a mutable buffer, which will be filled with received bytes
+        addr: str
+            The address to receive from (only required in master mode)
+        timeout: int
+             Timeout in milliseconds to wait for the receive.
+
+        Returns
+        -------
+        out : int, bytearray
+            If recv is an integer then a new buffer of the bytes received.
+            Otherwise, the same buffer that was passed in to recv.
+        """
+
+        if type(recv) is int:
+            out = bytes(recv)
+        elif type(recv) is bytearray:
+            out = recv
+        else:
+            raise TypeError('Argument should be of type int or bytearray.')
+
+        if self.is_ready(addr):
+            raise OSError('Address not active.')
+
+        return out
+
+    def send(self, send, addr=0x00, timeout=5000):
+        """
+
+        Parameters
+        ----------
+        send: int, bytearray
+            Data to send (an integer to send, or a buffer object)
+        addr: bytearray
+            The address to send to (only required in master mode)
+        timeout: int
+             Timeout in milliseconds to wait for the receive.
+        """
+        if type(send) not in [int, bytearray]:
+            raise TypeError('Argument should be of type int or bytearray.')
+        if addr is not self._addr:
+            raise Exception("Address is not active.")
+
+    def scan(self):
+        """Scan all I2C addresses and return active ones.
+
+        Scans addressed from 0x01 to 0x7f.
+        Only valid when in master mode.
+
+        Returns
+        -------
+        out : list
+            List of I2C addresses that respond
+        """
+        active_addresses = []
+
+        inspected_addresses_list = range(1, 128)
+        for integer in inspected_addresses_list:
+            address = hex(integer)
+            if self.is_ready(address):
+                active_addresses.append(address)
+
+        return active_addresses
 
 
 def LCD(skin_position):
@@ -380,8 +558,100 @@ def LED(number):
     return _board.leds[number]
 
 
-def Pin(id):
+class _Pin:
     """http://docs.micropython.org/en/latest/library/pyb.Pin.html"""
+
+    AF_OD = 0
+    AF_PP = 1
+    ANALOG = 2
+    IN = 3
+    OUT_OD = 4
+    OUT_PP = 5
+    PULL_DOWN = 6
+    PULL_NONE = 7
+    PULL_UP = 8
+
+    def __init__(self, id):
+        self._id = id
+
+        self._mode = None
+        self._pull = None
+        self._af = None
+
+        self._pin_value = bool(0)  # This corresponds to pin down.
+
+    def __str__(self):
+        return 'Emulated Pin object: {}'.format(self._id)
+
+    def init(self, mode, pull=PULL_NONE, af=-1):
+        self._mode = mode
+        self._pull = pull
+        self._af = af
+
+    def value(self, value=None):
+        # sys.stderr.write("Pin value: {}\n".format(value))
+        if value is not None:
+            self._pin_value = bool(value)
+        else:
+            return self._pin_value
+
+    def af(self):
+        # Todo
+        raise NotImplementedError(
+            "Contribute on github.com/alej0varas/pybolator")
+
+    def af_list(self):
+        """Returns an array of alternate functions available for this pin."""
+        # Todo
+        raise NotImplementedError(
+            "Contribute on github.com/alej0varas/pybolator")
+
+    def gpio(self):
+        """Returns the base address of the GPIO block associated with this pin."""
+        # Todo
+        raise NotImplementedError(
+            "Contribute on github.com/alej0varas/pybolator")
+
+    def mode(self):
+        """Returns the currently configured mode of the pin.
+
+        The integer returned will match one of the allowed constants for
+         the mode argument to the init function."""
+        return self._mode
+
+    def name(self):
+        """Get the pin name."""
+        # Todo:
+        return self._id
+
+    def names(self):
+        """Returns the cpu and board names for this pin."""
+        # Todo
+        raise NotImplementedError(
+            "Contribute on github.com/alej0varas/pybolator")
+
+    def pin(self):
+        """Get the pin number."""
+        # Todo
+        raise NotImplementedError(
+            "Contribute on github.com/alej0varas/pybolator")
+
+    def port(self):
+        """Get the pin port."""
+        # Todo
+        raise NotImplementedError(
+            "Contribute on github.com/alej0varas/pybolator")
+
+    def pull(self):
+        """Returns the currently configured pull of the pin.
+
+        The integer returned will match one of the allowed constants for
+         the pull argument to the init function."""
+        return self._pull
+
+
+def PinAF(bus):
+    """http://docs.micropython.org/en/latest/library/pyb.I2C.html"""
     raise NotImplementedError("Contribute on github.com/alej0varas/pybolator")
 
 

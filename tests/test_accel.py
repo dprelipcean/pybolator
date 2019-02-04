@@ -8,14 +8,14 @@ import pyb
 
 accel = pyb.Accel()
 # x
-accel.x()
+accel.x
 
 accel = pyb.Accel()
 light = pyb.LED(3)
 SENSITIVITY = 3
 
 for i in range(10):
-    x = accel.x()
+    x = accel.x
     if abs(x) > SENSITIVITY:
         light.on()
     else:
@@ -31,7 +31,7 @@ accel = pyb.Accel()
 SENSITIVITY = 3
 
 for i in range(10):
-    x = accel.x()
+    x = accel.x
     if x > SENSITIVITY:
         xlights[0].on()
         xlights[1].off()
