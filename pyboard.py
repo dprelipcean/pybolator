@@ -1,202 +1,359 @@
-from datetime import datetime
-from random import randint
-from time import sleep
-import bdb
-import threading
-import os
+"""Pyboard emulator
+
+@author: danielp
+Based on existing draft from:
+    github.com/alej0varas/pybolator"
+
+
+Description:
+    This script mock a pyboard, such that software can be tested w/o
+    the hardware.
+
+    In comparison to a completely mocked pyb module, this package
+    interacts with the software as a pyboard would.
+
+Usage inside scripts:
+    import <path_to_package>.pybolator.pyboard as pyb
+"""
+
+# ======================================================================
+# ========================= Import Statements ==========================
+# ======================================================================
+
+# # Built-in Imports:
 import sys
+from time import sleep
+from random import randint
 
-from pyfiglet import Figlet
+# # Third party imports:
+from unittest.mock import Mock
+# from datetime import datetime
 
-
-MAIN_FILENAME = os.environ.get("PYBOLATOR_MAIN", "main.py")
-
-
-class _Board:
-
-    leds = {}
-
-    def init(self, hardware=None):
-        sys.stderr.write("BOARD:init\n")
-        self.hardware = hardware
-        self.boot()
-
-        return self
-
-    def set_accel(self):
-        accel = self.hardware.get("accel")
-        if accel is not None:
-            self.accel = _Accel()
-
-    def set_LCD(self):
-        LCD = self.hardware.get("LCD")
-        if LCD:
-            self.LCD = _LCD(LCD)
-
-    def set_leds(self):
-        leds = self.hardware.get("LEDS")
-        if leds is not None:
-            _LED._intensity_min = leds["intensity_min"]
-            _LED._intensity_max = leds["intensity_max"]
-            c = 1
-            for color in leds["items"]:
-                self.leds[c] = _LED(color)
-                c += 1
-
-    def set_reset(self):
-        switch = self.hardware.get("reset")
-        if switch is not None:
-            self.reset = _Switch('reset', hard_reset)
-
-    def set_switch(self):
-        switch = self.hardware.get("switch")
-        if switch is not None:
-            self.switch = _Switch('user')
-
-    def main(self, pyb_script=None):
-        sys.stderr.write("BOARD:main\n")
-        self.keep_interpreter_running = True
-        self.keep_user_script_running = True
-
-        self.user_script_runner = _Runner(glo=globals())
-        self.user_script_runner.start()
-
-        self.interpreter = _Interpreter(pyb_script)
-        self.interpreter.start()
-
-    def stop_user_script(self):
-        sys.stderr.write("BOARD:stop_user_script\n")
-        self.keep_user_script_running = False
-
-    def stop_interpreter(self):
-        sys.stderr.write("BOARD:stop_interpreter\n")
-        self.interpreter.stop()
-
-    def stop(self):
-        sys.stderr.write("BOARD:stop\n")
-        self.stop_interpreter()
-        self.stop_user_script()
-
-    def boot(self):
-        sys.stderr.write("BOARD:boot\n")
-        self.boot_time = datetime.now()
-
-        self.set_accel()
-        self.set_LCD()
-        self.set_leds()
-        self.set_reset()
-        self.set_switch()
-
-        self.runner = _Runner()
+# ======================================================================
+# ============================== Script ================================
+# ======================================================================
 
 
-class _Interpreter:
+# ======================================================================
+# ======================== Pyboard connections ===========================
+# ======================================================================
 
-    commands = []
+PYBOARD_PINS = {
+    "X1": {
+        "status": "available",
+        "role": "PWM",
+        "usage": None,
+    },
 
-    def __init__(self, script=None):
-        if script is not None:
-            for line in script.split('\n'):
-                self.write(line)
+    "X2": {
+        "status": "available",
+        "role": "PWM",
+        "usage": None,
+    },
 
-        self.thread = threading.Thread(target=self.target)
+    "X3": {
+        "status": "available",
+        "role": "PWM",
+        "usage": None,
+    },
 
-    def target(self):
-        while _board.keep_interpreter_running:
-            command = self.read()
-            if command:
-                self.exec(command)
-            self.update()
-            sleep(.5)
+    "X4": {
+        "status": "available",
+        "role": "PWM",
+        "usage": None,
+    },
 
-    def start(self):
-        self.thread.start()
+    "X5": {
+        "status": "available",
+        "role": "PWM",
+        "usage": None,
+    },
 
-    def stop(self):
-        _board.keep_interpreter_running = False
+    "X6": {
+        "status": "available",
+        "role": "PWM",
+        "usage": None,
+    },
+}
 
-    def update(self):
-        _board.switch._update()
-        _board.reset._update()
 
-    def read(self):
-        sys.stderr.write("INT:read\n")
-        if len(self.commands):
-            command = self.commands.pop()
-            return command
+def _check_pin_availability(pin_name):
+    """
 
-    def write(self, command):
-        self.commands.insert(0, command)
+    Parameters
+    ----------
+    pin_name: str
 
-    def exec(self, command):
-        sys.stderr.write("INT:exec, %s \n" % command)
+    Returns
+    -------
 
-        if command == "sleep":
-            sys.stderr.write("INT:sleeping!!!\n")
-            sleep(1)
-        elif command == "user-switch:press":
-            _board.switch._press()
-        elif command == "user-switch:release":
-            _board.switch._release()
-        elif command == "reset-switch:press":
-            _board.reset._press()
-        elif command == "reset-switch:release":
-            _board.reset._release()
+    """
+    if pin_name not in PYBOARD_PINS:
+        raise Exception("Allocated Pin is not available on a pyboard.")
+
+    if PYBOARD_PINS[pin_name]["status"] is not "available":
+        usage = PYBOARD_PINS[pin_name]["usage"]
+        error_message = "Allocated Pin is already used by {}.".format(usage)
+        raise Exception(error_message)
+
+    PYBOARD_PINS[pin_name]["status"] = "not available"
+    return True
+
+# ======================================================================
+# ============================== Classes ================================
+# ======================================================================
+
+
+class Pin:
+    """http://docs.micropython.org/en/latest/library/pyb.Pin.html"""
+
+    # Mode constants
+    AF_OD = 0
+    AF_PP = 1
+    ANALOG = 2
+
+    IN = 3
+    OUT = 4
+
+    OUT_OD = 5
+    OUT_PP = 6
+
+    # Pull constants
+    PULL_DOWN = 7
+    PULL_NONE = 8
+    PULL_UP = 8
+
+    board = Mock()
+
+    def __init__(self, pin_id, **kwargs):
+        """Create a new Pin object associated with the id.
+
+        If additional arguments are given, they are used to initialise
+        the pin. See pin.init().
+
+        Parameters
+        ----------
+        pin_id: str or int
+
+        """
+
+        _check_pin_availability(pin_id)
+        self._id = pin_id
+
+        # Init attributes
+        if kwargs:
+            self.init(kwargs)
         else:
-            sys.stderr.write("INT:COMMAND NOT FOUND, %s \n" % command)
+            self._mode = None
+            self._pull = None
+            self._af = None
+
+        self._pin_value = bool(0)  # This corresponds to pin down.
+
+        # Attributes required/used in class methods
+        self.debug_state = False
+        self.pin_mapper_dict = {}
+        self.pin_mapper_function = None
+
+    def debug(self, state=None):
+        """Get or set the debugging state (True or False for on or off).
+
+        Parameters
+        ----------
+        state : bool
+
+        Returns
+        -------
+        out : bool
+        """
+        if state is None:
+            return self.debug_state
+        else:
+            self.debug_state = state
+
+    def dict(self, pin_mapper_dict):
+        """Get or set the pin mapper dictionary.
+
+        Parameters
+        ----------
+        pin_mapper_dict: dict
+
+        Returns
+        -------
+        out: dict
+        """
+        if pin_mapper_dict is None:
+            return self.pin_mapper_dict
+        else:
+            self.pin_mapper_dict = pin_mapper_dict
+
+    def mapper(self, func):
+        """Get or set the pin mapper function.
+
+        Parameters
+        ----------
+        func:
+
+        Returns
+        -------
+
+        """
+        if func is None:
+            return self.pin_mapper_function
+        else:
+            self.pin_mapper_function = func
+
+    def __str__(self):
+        """Return a string describing the pin object."""
+        return 'Emulated Pin object: {}'.format(self._id)
+
+    def init(self, mode, pull=PULL_NONE, af=-1):
+        """Initialise the pin:"""
+        self._mode = mode
+        self._pull = pull
+        self._af = af
+
+    def value(self, value=None):
+        """Get or set the digital logic level of the pin.
+
+        With value given,
+            Set the logic level of the pin.
 
 
-class _Runner:
-
-    class CPU(bdb.Bdb):
-        # def user_line(self, frame):
-        #     # Stop running user code
-        #     if not self.board.keep_user_script_running:
-        #         raise bdb.BdbQuit
-        #     # print('FRAME: ', frame.f_code)
-        pass
-
-    def __init__(self, glo=None):
-        self.globals = glo
-        self.thread = threading.Thread(target=self.target_bdb,
-                                       args=(MAIN_FILENAME,))
-
-    def target_bdb(self, main_filename):
-        with open(main_filename) as f:
-            statement = 'exec(%r)' % f.read()
-
-        statement += '\nimport time' \
-                     '\nwhile _board.keep_user_script_running: time.sleep(1)'
-
-        cpu = self.CPU()
-        cpu.board = self.globals['_board']
-        cpu.run(statement, self.globals)
-
-    def is_alive(self):
-        return self.thread.is_alive()
-
-    def start(self):
-        self.thread.start()
+        Parameters
+        ----------
+        value
+            Value can be anything that converts to a boolean.
+            If it converts to True, the pin is set high,
+            otherwise it is set low.
 
 
-class _Accel:
+        Returns
+        -------
+        out : 0 or 1
+            With no argument, depending on the logic level of the pin.
+        """
+        # sys.stderr.write("Pin value: {}\n".format(value))
+        if value is not None:
+            self._pin_value = bool(value)
+        else:
+            return self._pin_value
+
+    def af(self):
+        # Todo
+        raise NotImplementedError()
+
+    def af_list(self):
+        """Returns an array of alternate functions available for this pin."""
+        # Todo
+        raise NotImplementedError()
+
+    def gpio(self):
+        """Returns the base address of the GPIO block of this pin."""
+        # Todo
+        raise NotImplementedError()
+
+    def mode(self):
+        """Returns the currently configured mode of the pin.
+
+        The integer returned will match one of the allowed constants for
+         the mode argument to the init function."""
+        return self._mode
+
+    def name(self):
+        """Get the pin name."""
+        # Todo:
+        return self._id
+
+    def names(self):
+        """Returns the cpu and board names for this pin."""
+        # Todo
+        raise NotImplementedError()
+
+    def pin(self):
+        """Get the pin number."""
+        # Todo
+        raise NotImplementedError()
+
+    def port(self):
+        """Get the pin port."""
+        # Todo
+        raise NotImplementedError()
+
+    def pull(self):
+        """Returns the currently configured pull of the pin.
+
+        The integer returned will match one of the allowed constants for
+         the pull argument to the init function."""
+        return self._pull
+
+
+class ExtInt:
+
+    IRQ_FALLING = 270598144
+    IRQ_RISING = 269549568
+    IRQ_RISING_FALLING = 271646720
+
+    def __init__(self, pin, mode, pull, callback):
+        """
+
+        Parameters
+        ----------
+        pin
+        mode
+        pull
+        callback
+        """
+
+        _check_pin_availability(pin)
+        self.pin = pin
+
+        self.mode = mode
+        self.pull = pull
+        self.callback = callback
+
+        self.intrerupt = True
+
+    def disable(self):
+        """Disable the interrupt associated with the ExtInt object.
+
+        This could be useful for debouncing."""
+        self.intrerupt = False
+
+    def enable(self):
+        """Enable a disabled interrupt."""
+        self.intrerupt = True
+
+    def line(self):
+        raise NotImplementedError()
+
+    def swint(self):
+        raise NotImplementedError()
+
+
+class Accel:
 
     @property
     def x(self):
-        sys.stderr.write("ACCEL: x\n")
         return randint(0, 10)
 
     @property
     def y(self):
-        sys.stderr.write("ACCEL: y\n")
+        # sys.stderr.write("ACCEL: y\n")
         return randint(0, 10)
 
 
-class _LCD:
+class LCD:
 
-    def __init__(self, LCD):
-        self._y = LCD['y']
-        self._x = LCD['x']
+    def __init__(self, lcd):
+        """
+
+        Parameters
+        ----------
+        lcd
+        """
+        self._y = lcd['y']
+        self._x = lcd['x']
         self.skin_position = None
         self._buffer = None
         self._hidden_buffer = {}
@@ -218,26 +375,25 @@ class _LCD:
         with the instructions/data to send.
 
         """
-        sys.stderr.write("LCD:command: %s %s\n" % (instr_data, buf))
-        raise NotImplementedError(
-            "Contribute on github.com/alej0varas/pybolator")
+        # sys.stderr.write("LCD:command: %s %s\n" % (instr_data, buf))
+        raise NotImplementedError()
 
     def contrast(self, value):
-        sys.stderr.write("LCD:contrast: %s\n" % value)
+        # sys.stderr.write("LCD:contrast: %s\n" % value)
         self.contrast_value = value
 
     def get(self, x, y):
-        sys.stderr.write("LCD:get: %sx%s\n" % (x, y))
+        # sys.stderr.write("LCD:get: %sx%s\n" % (x, y))
         if self._buffer is None:
             return False
         return self._buffer[(x, y)]
 
     def light(self, value):
-        sys.stderr.write("LCD:light: %s\n" % value)
+        # sys.stderr.write("LCD:light: %s\n" % value)
         self.backlight = bool(value)
 
     def fill(self, colour):
-        sys.stderr.write("LCD:fill: %s\n" % colour)
+        # sys.stderr.write("LCD:fill: %s\n" % colour)
         for y in range(self._y):
             for x in range(self._x):
                 self.pixel(x, y, colour)
@@ -247,14 +403,15 @@ class _LCD:
         self._hidden_buffer[(x, y)] = colour
 
     def show(self):
-        sys.stderr.write("LCD:show\n")
+        # sys.stderr.write("LCD:show\n")
         self._buffer = self._hidden_buffer.copy()
 
     def text(self, text, x, y, colour):
-        sys.stderr.write("LCD:text %s %sx%s %s\n" % (text, x, y, colour))
-        font = 'clr8x8'
-        figlet = Figlet(font=font, width=self._x)
-        txt = figlet.renderText(text)
+        # sys.stderr.write("LCD:text %s %sx%s %s\n" % (text, x, y, colour))
+        # font = 'clr8x8'
+        # figlet = Figlet(font=font, width=self._x)
+        # txt = figlet.renderText(text)
+        txt = text
         dx = 0
         dy = 0
         color = 0
@@ -271,7 +428,7 @@ class _LCD:
             dx += 1
 
     def write(self, text):
-        sys.stderr.write("LCD:write: %s\n" % text)
+        # sys.stderr.write("LCD:write: %s\n" % text)
         self.text(text, 0, 0, 0)
         self.show()
 
@@ -282,7 +439,7 @@ class _LCD:
             sys.stdout.write('\n')
 
 
-class _LED:
+class LED:
 
     # Values in percentage
     _intensity_min = 0
@@ -314,90 +471,264 @@ class _LED:
         self._intensity = value
 
 
-class _Switch:
+class Switch:
+    """A Switch object is used to control a push-button switch.
+
+    http://docs.micropython.org/en/latest/library/pyb.Switch.html
+    """
 
     _pressed = False
 
-    def __init__(self, name, callable=None):
+    def __init__(self, name=None, callable_func=None):
         self._name = name
-        self._callable = callable
+        self._callable = callable_func
 
     def __call__(self):
-        sys.stderr.write("SWITCH {} call > {}:\n".format(self._name, self._pressed))
+        sys.stderr.write(
+            "SWITCH {} call > {}:\n".format(self._name, self._pressed)
+        )
         return self._pressed
 
-    def callback(self, callable):
-        sys.stderr.write("SWITCH {}: callback {}\n".format(self._name, callable))
-        self._callable = callable
+    def callback(self, callable_func):
+        sys.stderr.write(
+            "SWITCH {}: callback {}\n".format(self._name, callable_func)
+        )
+        self._callable = callable_func
 
-    def _press(self):
+    def press(self):
         sys.stderr.write("SWITCH {}: pressed\n".format(self._name))
         self._pressed = True
 
-    def _release(self):
+    def release(self):
         sys.stderr.write("SWITCH {}: released\n".format(self._name))
         self._pressed = False
 
-    def _update(self):
+    def update(self):
         if self._pressed and self._callable is not None:
             self._callable()
 
 
-#
-# pyb method and classes
-#
+class ADC:
+    """Create an ADC object associated with the given pin.
 
-def Accel():
-    return _board.accel
+    This allows you to then read analog values on that pin.
+
+    http://docs.micropython.org/en/latest/library/pyb.ADC.html"""
+
+    def __init__(self, pin):
+        _check_pin_availability(pin)
+        self._pin = pin
+
+        self._value = randint(0, 4095)
+
+    def read(self):
+        """Read the value on the analog pin and return it
+
+        Returns
+        -------
+        out : int
+            Value between 0 and 4095
+        """
+
+        return self._value
+
+    def read_timed(self, buf, timer):
+        """Read analog values into buf at a rate set by the timer object.
+
+        Parameters
+        ----------
+        buf: ArrayType
+            The ADC values have 12-bit resolution and are stored directly
+            into buf if its element size is 16 bits or greater.
+
+            If buf has only 8-bit elements (eg a bytearray) then the
+            sample resolution will be reduced to 8 bits.
+        timer: Timer
+            A sample is read each time the timer triggers. T
+            he timer must already be initialised and running at the
+            desired sampling frequency.
+
+        Returns
+        -------
+
+        """
+        _timer = timer
+        for j in range(len(buf)):
+            buf[j] = randint(0, 1)
+
+        return buf
 
 
-def ADC(pin):
+class ADCAll:
     """http://docs.micropython.org/en/latest/library/pyb.ADC.html"""
-    raise NotImplementedError("Contribute on github.com/alej0varas/pybolator")
+
+    def __init__(self, resolution):
+
+        self.resolution = resolution
+
+        raise NotImplementedError()
 
 
-def ADCAll(resolution):
-    """http://docs.micropython.org/en/latest/library/pyb.ADC.html"""
-    raise NotImplementedError("Contribute on github.com/alej0varas/pybolator")
-
-
-def CAN(bus):
+class CAN:
     """http://docs.micropython.org/en/latest/library/pyb.CAN.html"""
-    raise NotImplementedError("Contribute on github.com/alej0varas/pybolator")
+    def __init__(self, bus):
+        self.bus = bus
+        raise NotImplementedError()
 
 
-def DAC(port, bits=8):
-    """http://docs.micropython.org/en/latest/library/pyb.DAC.html"""
-    raise NotImplementedError("Contribute on github.com/alej0varas/pybolator")
+class DAC:
+    """The DAC is used to output analog values (voltage) on pin X5 or pin X6.
 
 
-def ExtInt(pin, mode, pull, callback):
-    """http://docs.micropython.org/en/latest/library/pyb.ExtInt.html"""
-    raise NotImplementedError("Contribute on github.com/alej0varas/pybolator")
+    The output voltage will be between 0 and 3.3V
+
+    Pyboard documentation:
+        http://docs.micropython.org/en/latest/library/pyb.DAC.html"""
+
+    NORMAL = 1
+    CIRCULAR = 2
+
+    def __init__(self, port, bits=8, buffering=None):
+        """Construct a new DAC object.
+
+        When buffering is enabled the DAC pin can drive loads down to 5KΩ.
+        Otherwise it has an output impedance of 15KΩ maximum: consequently to
+        achieve a 1% accuracy without buffering requires the applied load to be
+        less than 1.5MΩ. Using the buffer incurs a penalty in accuracy,
+        especially near the extremes of range.
+
+        Parameters
+        ----------
+        port: Pin or int
+            Pin object
+            OR
+            An integer (1 or 2). DAC(1) is on pin X5 and DAC(2) is on pin X6.
+        bits: int
+            Resolution, and can be 8 or 12.
+            The maximum value for the write and write_timed methods will
+             be 2**``bits``-1.
+        buffering: bool, optional
+            Selects the behaviour of the DAC op-amp output buffer, whose
+            purpose is to reduce the output impedance.
+            If:
+                None
+                    It selects the default (buffering enabled for
+                    DAC.noise(), DAC.triangle() and DAC.write_timed(), and
+                    disabled for DAC.write()),
+                False:
+                    Disable buffering completely
+                True:
+                    Enable output buffering.
+            Defaults to None.
+        """
+
+        # Check port input validity
+        if type(port) == int:
+            if port == 1:
+                pin_name = 'X5'
+            elif port == 2:
+                pin_name = 'X6'
+            else:
+                raise Exception("Allocated Pin cannot be used for DAC.")
+        elif isinstance(port, Pin):
+            pin_name = port.name
+        else:
+            raise Exception("Allocated Pin is not of valid type.")
+
+        _check_pin_availability(pin_name)
+        self.port = port
+
+        # Check bits input validity
+        if type(bits) != int:
+            raise Exception("Input bits is of not int type.")
+        if bits not in [8, 12]:
+            raise Exception("Input bits has to be either 8 or 12.")
+
+        self.bits = bits
+        self.buffering = buffering
+
+        # Values defined in subsequent methods
+        self.value = None
+
+    def init(self):
+        raise NotImplementedError()
+
+    def deinit(self):
+        """De-initialise the DAC making its pin available for other uses."""
+        raise NotImplementedError()
+
+    def noise(self, freq):
+        """Generate a pseudo-random noise signal.
+
+        A new random sample is written to the DAC output at the given frequency."""
+        raise NotImplementedError()
+
+    def triangle(self, freq):
+        """Generate a triangle wave.
+
+        The value on the DAC output changes at the given frequency, and the frequency of the repeating triangle wave itself is 2048 times smaller."""
+        raise NotImplementedError()
+
+    def write(self, value):
+        """Direct access to the DAC output.
+
+        Parameters
+        ----------
+        value: int
+            The minimum value is 0.
+            The maximum value is 2**``bits``-1, where bits is set when creating the DAC object or by using the init method.
+        """
+        if type(value) != int:
+            raise Exception('DAC value must be an integer.')
+
+        if value < 0:
+            raise Exception('DAC Value has to be positive.')
+        elif value > 2 ** self.bits -1:
+            raise Exception('Given value is too large.')
+
+        self.value = value
+
+    def write_timed(self, data, freq, mode=NORMAL):
+        """Initiates a burst of RAM to DAC using a DMA transfer.
+
+        Parameters
+        ----------
+        data: bytearray
+            Treated as an array of bytes in 8-bit mode, and an array of
+            unsigned half-words (array typecode ‘H’) in 12-bit mode.
+        freq: int, Timer
+            An integer specifying the frequency to write the DAC
+            samples at, using Timer(6).
+            OR
+            An already-initialised Timer object which is used to trigger
+            the DAC sample. Valid timers are 2, 4, 5, 6, 7 and 8.
+        mode: NORMAL or CIRCULAR
+        """
+        data = bytes([self.bits])
+
+        self.value = data
+        raise NotImplementedError()
 
 
-class I2C():
+class I2C:
     """http://docs.micropython.org/en/latest/library/pyb.I2C.html"""
 
     MASTER = 0
     SLAVE = 1
 
-    def __init__(self, bus):
+    def __init__(self, bus, *args):
         self._bus = bus
 
         # Pyboard connections
         if bus == 1:
             self._scl_pin_number = 'X9'
             self._sda_pin_number = 'X10'
-
-            pass
         elif bus == 2:
             self._scl_pin_number = 'Y9'
             self._sda_pin_number = 'Y10'
-            pass
 
-        self._scl_pin = _Pin(self._scl_pin_number)
-        self._sda_pin = _Pin(self._sda_pin_number)
+        self._scl_pin = Pin(self._scl_pin_number)
+        self._sda_pin = Pin(self._sda_pin_number)
 
         # Parameters
         self._mode = None
@@ -408,9 +739,7 @@ class I2C():
 
     def deinit(self):
         """Turn off the I2C bus."""
-        # Todo
-        raise NotImplementedError(
-            "Contribute on github.com/alej0varas/pybolator")
+        raise NotImplementedError()
 
     def init(self, mode, addr=0x12, baudrate=400000, gencall=False, dma=False):
         """
@@ -459,21 +788,12 @@ class I2C():
             True, if an I2C device responds to the given address.
             False, otherwise
         """
-        # Todo: Other criterion?
-        if self._addr == addr:
-            return True
-        else:
-            return False
 
-    def mem_read(self):
-        # Todo
-        raise NotImplementedError(
-            "Contribute on github.com/alej0varas/pybolator")
+    def mem_read(self, data, addr, memaddr, timeout=5000, addr_size=8):
+        raise NotImplementedError()
 
-    def mem_write(self):
-        # Todo
-        raise NotImplementedError(
-            "Contribute on github.com/alej0varas/pybolator")
+    def mem_write(self, data, addr, memaddr, timeout=5000, addr_size=8):
+        raise NotImplementedError()
 
     def recv(self, recv, addr=0x00, timeout=5000):
         """
@@ -547,149 +867,410 @@ class I2C():
         return active_addresses
 
 
-def LCD(skin_position):
-    """http://docs.micropython.org/en/latest/library/pyb.LCD.html"""
-    sys.stdout.write("PYB:LCD:%s\n" % skin_position)
-    return _board.LCD(skin_position)
-
-
-def LED(number):
-    sys.stdout.write("PYB:LED:%s\n" % number)
-    return _board.leds[number]
-
-
-class _Pin:
-    """http://docs.micropython.org/en/latest/library/pyb.Pin.html"""
-
-    AF_OD = 0
-    AF_PP = 1
-    ANALOG = 2
-    IN = 3
-    OUT_OD = 4
-    OUT_PP = 5
-    PULL_DOWN = 6
-    PULL_NONE = 7
-    PULL_UP = 8
-
-    def __init__(self, id):
-        self._id = id
-
-        self._mode = None
-        self._pull = None
-        self._af = None
-
-        self._pin_value = bool(0)  # This corresponds to pin down.
-
-    def __str__(self):
-        return 'Emulated Pin object: {}'.format(self._id)
-
-    def init(self, mode, pull=PULL_NONE, af=-1):
-        self._mode = mode
-        self._pull = pull
-        self._af = af
-
-    def value(self, value=None):
-        # sys.stderr.write("Pin value: {}\n".format(value))
-        if value is not None:
-            self._pin_value = bool(value)
-        else:
-            return self._pin_value
-
-    def af(self):
-        # Todo
-        raise NotImplementedError(
-            "Contribute on github.com/alej0varas/pybolator")
-
-    def af_list(self):
-        """Returns an array of alternate functions available for this pin."""
-        # Todo
-        raise NotImplementedError(
-            "Contribute on github.com/alej0varas/pybolator")
-
-    def gpio(self):
-        """Returns the base address of the GPIO block associated with this pin."""
-        # Todo
-        raise NotImplementedError(
-            "Contribute on github.com/alej0varas/pybolator")
-
-    def mode(self):
-        """Returns the currently configured mode of the pin.
-
-        The integer returned will match one of the allowed constants for
-         the mode argument to the init function."""
-        return self._mode
-
-    def name(self):
-        """Get the pin name."""
-        # Todo:
-        return self._id
-
-    def names(self):
-        """Returns the cpu and board names for this pin."""
-        # Todo
-        raise NotImplementedError(
-            "Contribute on github.com/alej0varas/pybolator")
-
-    def pin(self):
-        """Get the pin number."""
-        # Todo
-        raise NotImplementedError(
-            "Contribute on github.com/alej0varas/pybolator")
-
-    def port(self):
-        """Get the pin port."""
-        # Todo
-        raise NotImplementedError(
-            "Contribute on github.com/alej0varas/pybolator")
-
-    def pull(self):
-        """Returns the currently configured pull of the pin.
-
-        The integer returned will match one of the allowed constants for
-         the pull argument to the init function."""
-        return self._pull
-
-
-def PinAF(bus):
+class PinAF:
     """http://docs.micropython.org/en/latest/library/pyb.I2C.html"""
-    raise NotImplementedError("Contribute on github.com/alej0varas/pybolator")
+    def __init__(self, bus):
+
+        self.bus = bus
+        raise NotImplementedError()
 
 
 # http://docs.micropython.org/en/latest/library/pyb.Pin.html#class-pinaf-pin-alternate-functions
 
-
-def RTC():
+class RTC:
     """http://docs.micropython.org/en/latest/library/pyb.RTC.html"""
-    raise NotImplementedError("Contribute on github.com/alej0varas/pybolator")
+    def __init__(self):
+        raise NotImplementedError()
 
 
-def Servo(id):
+class Servo:
     """http://docs.micropython.org/en/latest/library/pyb.Servo.html"""
-    raise NotImplementedError("Contribute on github.com/alej0varas/pybolator")
+    def __init__(self, identifier):
+        self.id = identifier
+        raise NotImplementedError()
 
 
-def SPI(bus, mode, **kwargs):
+class SPI:
     """http://docs.micropython.org/en/latest/library/pyb.SPI.html"""
-    raise NotImplementedError("Contribute on github.com/alej0varas/pybolator")
+
+    # ToDO: finish
+
+    MASTER = 0
+    SLAVE = 1
+    LSB = 2
+    MSB = 3
+
+    def __init__(self, bus, mode, **kwargs):
+
+        self.bus = bus
+        self.mode = mode
+
+        self._sent_data = None
+        self._out_data = None
+
+        if kwargs:
+            self.init(kwargs)
+
+    def deinit(self):
+        raise NotImplementedError()
+
+    def init(self, kwargs):
+        raise NotImplementedError()
+
+    def send(self, data, timeout=5000):
+        """Send data on the bus,
+
+        Parameters
+        ----------
+        data: int, bytes or bytearray
+            Data to send
+        timeout: int
+            Milliseconds to wait for the send.
+        """
+        _timeout = timeout
+        self._sent_data = data
+
+    def recv(self, recv, timeout=5000):
+        """Receive data on the bus.
+
+        Parameters
+        ----------
+        recv: int or buffer
+            If  int, number of bytes to receive
+                a mutable buffer, which will be filled with received bytes.
+        timeout: int
+            Milliseconds to wait for the receive.
+
+        Returns
+        -------
+        out: int or buffer
+            If recv:
+                is an integer then a new buffer of the bytes received,
+                otherwise the same buffer that was passed in to recv.
+        """
+        if type(recv) == int:
+            self._out_data = []
+            for j in range(recv):
+                self._out_data.append(randint(0, 1))
+        else:
+            address = randint(0, 255)
+            self._out_data = bytes([address, 0])
+
+        return self._out_data
+
+    def send_recv(self, send, recv=None, timeout=5000):
+        """Send and receive data on the bus at the same time:
+
+        Parameters
+        ----------
+        send: int, buffer
+            Data to send
+        recv: buffer
+            Mutable buffer which will be filled with received bytes.
+            It can be the same as send, or omitted.
+            If omitted, a new buffer will be created.
+        timeout: int
+            Milliseconds to wait for the receive.
+
+        Returns
+        -------
+        out : buffer
+            Received bytes.
+        """
+
+        self.send(send)
+        _timeout = timeout
+
+        if recv:
+            for j in range(len(recv)):
+                recv[j] = randint(0, 1)
+        else:
+            address = randint(0, 255)
+            self._out_data = bytes([address, 0])
+
+        return self._out_data
 
 
-def Timer(id, **kwargs):
-    """http://docs.micropython.org/en/latest/library/pyb.Timer.html"""
-    raise NotImplementedError("Contribute on github.com/alej0varas/pybolator")
+class Timer:
+    """
+
+    http://docs.micropython.org/en/latest/library/pyb.Timer.html"""
+
+    PWM = Mock()
+    PWM_INVERTED = Mock()
+    OC_TIMING = Mock()
+    OC_CTIVE = Mock()
+    OC_INACTIVE = Mock()
+    OC_TOGGLE = Mock()
+    OC_FORCE_ACTIVE = Mock()
+    OF_FORCED_INACTIVE = Mock()
+    I2C = Mock()
+    ENC_A = Mock()
+    ENC_B = Mock()
+    ENC_AB = Mock()
+
+    def __init__(self, pin_id, freq=100, prescaler=83, period=999):
+        """Construct a new timer object of the given id."""
+        self._id = pin_id
+
+        self.timer_frequency = freq
+        self.timer_prescaler = prescaler
+        self.timer_period = period
+
+        self.counter = None
+
+    def init(self):
+        raise NotImplementedError()
+
+    def deinit(self):
+        raise NotImplementedError()
+
+    def callback(self):
+        raise NotImplementedError()
+
+    @staticmethod
+    def channel(channel, mode, **kwargs):
+        return TimerChannel(channel, mode, **kwargs)
+
+    def counter(self, value=None):
+        """Get or set the timer counter.
+
+        Parameters
+        ----------
+        value: int, optional
+            Defaults to None.
+
+        Returns
+        -------
+        out: int
+        """
+        if value is not None:
+            self.counter = value
+        else:
+            return self.counter
+
+    def freq(self, value=None):
+        """Get or set the frequency for the timer.
+
+        # Todo:
+        Changes prescaler and period if set.
+
+        Parameters
+        ----------
+        value: int, optional
+            Defaults to None.
+
+        Returns
+        -------
+        out: int
+        """
+        if value is not None:
+            self.timer_frequency = value
+        else:
+            return self.timer_frequency
+
+    def period(self, value=None):
+        """Get or set the period of the timer.
+
+        Parameters
+        ----------
+        value: int, optional
+            Defaults to None.
+
+        Returns
+        -------
+        out: int
+        """
+        if value is not None:
+            self.timer_period = value
+        else:
+            return self.timer_period
+
+    def prescaler(self, value=None):
+        """Get or set the period of the timer.
+
+        Parameters
+        ----------
+        value: int, optional
+            Defaults to None.
+
+        Returns
+        -------
+        out: int
+        """
+        if value is not None:
+            self.timer_prescaler = value
+        else:
+            return self.timer_prescaler
+
+    def source_freq(self):
+        """Get the frequency of the source of the timer.
+
+        Returns
+        -------
+        out: int
+        """
+        return self.timer_frequency
 
 
-def UART(bus, baudrate):
+class TimerChannel:
+
+    def __init__(self, channel, mode, **kwargs):
+        # Todo: finish
+        self.value = None
+        self.channel = channel
+        self.mode = mode
+
+        if kwargs:
+            pass
+
+    def capture(self):
+        raise NotImplementedError()
+
+    def compare(self):
+        raise NotImplementedError()
+
+    def pulse_width(self):
+        raise NotImplementedError()
+
+    def pulse_width_percent(self, percent=None):
+        """Get or set the pulse width percentage associated with a channel.
+
+        The value can be an integer or floating-point number for more accuracy.
+
+        Parameters
+        ----------
+        percent : float, optional
+            The value is a number between 0 and 100 and sets the percentage of
+            the timer period for which the pulse is active.
+            For example, a value of 25 gives a duty cycle of 25%.
+            If not given, defaults to None.
+
+        Returns
+        -------
+        out : float
+            The current value of the timer channel.
+        """
+
+        if percent is None:
+            return self.value
+
+        self.value = percent
+
+
+class UART:
     """http://docs.micropython.org/en/latest/library/pyb.UART.html"""
-    raise NotImplementedError("Contribute on github.com/alej0varas/pybolator")
+
+    RTS = 1
+    CTS = ""
+
+    def __init__(self, bus, baudrate, **kwargs):
+
+        self.bus = bus
+        self.baudrate = baudrate
+
+        if kwargs:
+            self.init(kwargs)
+
+        self._read_buf = None
+        self._written_buf = None
+
+    def init(self, kwargs):
+        raise NotImplementedError()
+
+    def deinit(self):
+        raise NotImplementedError()
+
+    def any(self):
+        """Returns the number of bytes waiting (may be 0)."""
+        return randint(0, 10)
+
+    def read(self, nbytes=None):
+        """Read characters.
+
+        If nbytes is specified, read at most that many bytes.
+            If nbytes are available in the buffer, returns immediately,
+            otherwise returns when sufficient characters arrive or the
+            timeout elapses.
+
+        If nbytes is not given, the method reads as much data as possible.
+            It returns after the timeout has elapsed.
+
+        Note:
+            for 9 bit characters each character takes two bytes, nbytes
+            must be even, and the number of characters is nbytes/2.
+
+        Return value: a bytes object containing the bytes read in.
+        Returns None on timeout."""
+
+        if nbytes:
+            number_of_bytes = nbytes
+        else:
+            number_of_bytes = 5
+
+        self._read_buf = bytes(number_of_bytes)
+
+        return self._read_buf
+
+    def readchar(self):
+        raise NotImplementedError()
+
+    def readinto(self):
+        raise NotImplementedError()
+
+    def readline(self):
+        raise NotImplementedError()
+
+    def write(self, buf):
+        """Write the buffer of bytes to the bus.
+
+        If characters are 7 or 8 bits wide then each byte is one
+        character. If characters are 9 bits wide then two bytes are used
+        for each character (little endian), and buf must contain an even
+        number of bytes.
+
+        Parameters
+        ----------
+        buf: buffer
+
+        Returns
+        -------
+        out : int
+            number of bytes written.
+            If a timeout occurs and no bytes were written returns
+        """
+
+        # Todo: implement a timeout condition.
+        timeout = False
+
+        while not timeout:
+            self._written_buf = buf
+            out = len(self._written_buf)
+            return out
+
+    def writechar(self, char):
+        """Write a single character on the bus.
+
+        Parameters
+        ----------
+        char: int
+
+        Returns
+        -------
+        out: None.
+            See note below if CTS flow control is used.
+        """
+        self._written_buf += char
+
+    def sendbreak(self):
+        raise NotImplementedError()
 
 
-def USB_VCP():
+class USB_VCP:
     """http://docs.micropython.org/en/latest/library/pyb.USB_VCP.html"""
-    raise NotImplementedError("Contribute on github.com/alej0varas/pybolator")
+    def __init__(self):
+        raise NotImplementedError()
 
-
-def Switch():
-    return _board.switch
 
 #
 # Time related functions
@@ -705,41 +1286,41 @@ def udelay(us):
     sleep(us / 1000000)
 
 
-def millis():
-    sys.stderr.write("PYB: millis\n")
-    result = micros() / 1000
-    return result
+# def millis():
+#     sys.stderr.write("PYB: millis\n")
+#     result = micros() / 1000
+#     return result
 
 
-def micros():
-    sys.stderr.write("PYB: micros\n")
-    delta = datetime.now() - _board.boot_time
-    result = delta.total_seconds() * 1000000
-    return result
+# def micros():
+#     sys.stderr.write("PYB: micros\n")
+#     delta = datetime.now() - _board.boot_time
+#     result = delta.total_seconds() * 1000000
+#     return result
 
 
-def elapsed_millis(start):
-    sys.stderr.write("PYB: elapsed_millis\n")
-    result = elapsed_micros(start) / 1000
-    return result
+# def elapsed_millis(start):
+#     sys.stderr.write("PYB: elapsed_millis\n")
+#     result = elapsed_micros(start) / 1000
+#     return result
 
 
-def elapsed_micros(start):
-    sys.stderr.write("PYB: elapsed_micros\n")
-    result = micros() - start
-    return result
+# def elapsed_micros(start):
+#     sys.stderr.write("PYB: elapsed_micros\n")
+#     result = micros() - start
+#     return result
 
 
-def hard_reset():
-    """Resets the pyboard in a manner similar to pushing the external
-    RESET button.
-    """
-    _board.boot()
+# def hard_reset():
+#     """Resets the pyboard in a manner similar to pushing the external
+#     RESET button.
+#     """
+#     _board.boot()
 
 
 def bootloader():
     """Activate the bootloader without BOOT\* pins."""
-    raise NotImplementedError("Contribute on github.com/alej0varas/pybolator")
+    raise NotImplementedError()
 
 
 def disable_irq():
@@ -748,7 +1329,7 @@ def disable_irq():
     disabled/enabled IRQs respectively.  This return value can be
     passed to enable_irq to restore the IRQ to its original state.
     """
-    raise NotImplementedError("Contribute on github.com/alej0varas/pybolator")
+    raise NotImplementedError()
 
 
 def enable_irq(state=True):
@@ -758,7 +1339,7 @@ def enable_irq(state=True):
     most common use of this function is to pass it the value returned
     by ``disable_irq`` to exit a critical section.
     """
-    raise NotImplementedError("Contribute on github.com/alej0varas/pybolator")
+    raise NotImplementedError()
 
 
 def freq(sysclk=None, hclk=None, pclk1=None, pclk2=None):
@@ -802,7 +1383,7 @@ def freq(sysclk=None, hclk=None, pclk1=None, pclk2=None):
     note that sysclk frequencies below 36MHz do not allow the USB to
     function correctly.
     """
-    raise NotImplementedError("Contribute on github.com/alej0varas/pybolator")
+    raise NotImplementedError()
 
 
 def wfi():
@@ -814,7 +1395,7 @@ def wfi():
     system-tick interrupt occurs once every millisecond (1000Hz) so
     this function will block for at most 1ms.
     """
-    raise NotImplementedError("Contribute on github.com/alej0varas/pybolator")
+    raise NotImplementedError()
 
 
 def stop():
@@ -828,7 +1409,7 @@ def stop():
     See :meth:`rtc.wakeup` to configure a real-time-clock wakeup
     event.
     """
-    raise NotImplementedError("Contribute on github.com/alej0varas/pybolator")
+    raise NotImplementedError()
 
 
 def standby():
@@ -842,7 +1423,7 @@ def standby():
     See :meth:`rtc.wakeup` to configure a real-time-clock wakeup
     event.
     """
-    raise NotImplementedError("Contribute on github.com/alej0varas/pybolator")
+    raise NotImplementedError()
 
 
 def have_cdc():
@@ -851,7 +1432,7 @@ def have_cdc():
     This function is deprecated.  Use pyb.USB_VCP().isconnected()
     instead.
     """
-    raise NotImplementedError("Contribute on github.com/alej0varas/pybolator")
+    raise NotImplementedError()
 
 
 def hid(buttons, x, y, z):
@@ -860,12 +1441,12 @@ def hid(buttons, x, y, z):
 
     This function is deprecated.  Use pyb.USB_HID().send(...) instead.
     """
-    raise NotImplementedError("Contribute on github.com/alej0varas/pybolator")
+    raise NotImplementedError()
 
 
 def info(dump_alloc_table=None):
     """Print out lots of information about the board."""
-    raise NotImplementedError("Contribute on github.com/alej0varas/pybolator")
+    raise NotImplementedError()
 
 
 def main(filename):
@@ -875,7 +1456,7 @@ def main(filename):
 
     It only makes sense to call this function from within boot.py.
     """
-    raise NotImplementedError("Contribute on github.com/alej0varas/pybolator")
+    raise NotImplementedError()
 
 
 def mount(device, mountpoint, *args, readonly=False, mkfs=False):
@@ -912,29 +1493,27 @@ def mount(device, mountpoint, *args, readonly=False, mkfs=False):
     To unmount a device, pass ``None`` as the device and the mount
     location as ``mountpoint``.
     """
-    raise NotImplementedError("Contribute on github.com/alej0varas/pybolator")
+    raise NotImplementedError()
 
 
 def repl_uart(uart):
     """Get or set the UART object where the REPL is repeated on."""
-    raise NotImplementedError("Contribute on github.com/alej0varas/pybolator")
+    raise NotImplementedError()
 
 
 def rng():
     """Return a 30-bit hardware generated random number."""
-    raise NotImplementedError("Contribute on github.com/alej0varas/pybolator")
+    raise NotImplementedError()
 
 
 def sync():
     """Sync all file systems."""
-    raise NotImplementedError("Contribute on github.com/alej0varas/pybolator")
+    raise NotImplementedError()
 
 
 def unique_id():
     """Returns a string of 12 bytes (96 bits), which is the unique ID of
     the MCU.
     """
-    raise NotImplementedError("Contribute on github.com/alej0varas/pybolator")
+    raise NotImplementedError()
 
-
-_board = _Board()

@@ -9,46 +9,24 @@ PyBoard emulator
 Features
 ========
 
-- Run any `main.py` script.
-- See what happens to the pyboard in the GUI or
-- Run in batch mode and optionally
+- Allows minor testing of micropython code without an actual pyboard.
 - Simulate hardware interaction from a script.
+- Contains Pins configuration.
 
-Install
+Usage
 =======
-::
-
-  $ pip install -r requirements.txt
-  $ sudo apt-get install python3-tk
-
-Run
-~~~
-
-GUI
-+++
-::
-
-  $ PYBOLATOR_MAIN=path/to/main.py python3 pybolator.py
-
-Batch
-+++++
-::
-
-  $ PYBOLATOR_MAIN=path/to/main.py python3 pybolator.py --batch
-
-optionally pass a `pyb` script
-::
-
-  $ PYBOLATOR_MAIN=path/to/main.py python3 pybolator.py --batch tests/script.pyb
+Include the following import structure:
 
 
-Development
-~~~~~~~~~~~
-::
 
-  $ mkvirtualenv --python=/path/to/python3.x pybolator
-  $ workon pybolator
-  $ PYBOLATOR_MAIN=test.py python pybolator.py
+```python
+    try:
+        import pyb
+    except ModuleNotFoundError:
+        import tests.emulators.pybolator.pyboard as pyb
+        print("Run pyb as mock.")
+```
+
 
 Supported methods and classes
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -58,10 +36,8 @@ Time related functions
 
 - delay(ms)
 - udelay(us)
-- millis()
-- micros()
-- elapsed_millis(start)
-- elapsed_micros(start)
+
+
 
 Class pyb.Accel
 +++++++++++++++
@@ -71,6 +47,16 @@ Methods
 
 - accel.x()
 - accel.y()
+
+
+Class pyb.ADC
++++++++++++++
+
+Methods
+#######
+
+- adc.read()
+- adc.read_timed()
 
 Class pyb.LCD
 +++++++++++++
@@ -88,6 +74,35 @@ Methods
 - lcd.text(str, x, y, colour)
 - lcd.write(str)
 
+Class pyb.ExtInt
+++++++++++++++++
+
+Methods
+#######
+
+- extint.disable()
+- extint.enable()
+
+Class pyb.DAC
++++++++++++++
+
+Methods
+#######
+
+- dac.write_timed()
+- dac.write()
+
+Class pyb.I2C
++++++++++++++
+
+Methods
+#######
+
+- i2c.init()
+- i2c.is_ready()
+- i2c.recv()
+- i2c.send()
+- i2c.scan()
 
 Class pyb.LED
 +++++++++++++
@@ -100,6 +115,30 @@ Methods
 - led.on()
 - led.toggle()
 
+Class pyb.Pin
++++++++++++++
+
+Methods
+#######
+- pin.debug()
+- pin.dict()
+- pin.mapper()
+- pin.init()
+- pin.value()
+- pin.name()
+- pin.pull()
+
+
+Class pyb.SPI
++++++++++++++
+
+Methods
+#######
+
+- spi.send()
+- spi.recv()
+- spi.send_recv()
+
 Class pyb.Switch
 ++++++++++++++++
 
@@ -109,10 +148,36 @@ Methods
 - switch()
 - switch.callback(fun)
 
-Reset related functions
-+++++++++++++++++++++++
+Class pyb.Timer
+++++++++++++++++
 
-- hard_reset()
+Methods
+#######
+
+- timer.counter()
+- timer.freq()
+- timer.period()
+- timer.prescaler()
+- timer.source_freq()
+
+Class pyb.TimerChannel
++++++++++++++++
+
+Methods
+#######
+
+- timerchannel.pulse_width_percent()
+
+Class pyb.UART
++++++++++++++++
+
+Methods
+#######
+
+- uart.any()
+- uart.read()
+- uart.write()
+- uart.writerchar()
 
 Unsupported methods and classes
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -159,8 +224,43 @@ Methods
 - accel.tilt()
 - accel.z()
 
-Class pyb.ADC
+Class pyb.ADCAll
 +++++++++++++
+
+
+Class pyb.CAN
++++++++++++++
+
+Class pyb.DAC
++++++++++++++
+
+Methods
+#######
+
+- dac.init()
+- dac.deinit()
+- dac.noise()
+- dac.triangle()
+
+Class pyb.ExtInt
+++++++++++++++++
+
+Methods
+#######
+
+- extint.line()
+- extint.swint()
+
+
+Class pyb.I2C
++++++++++++++
+
+Methods
+#######
+
+- i2c.deinit()
+- i2c.mem_read()
+- i2c.mem_write()
 
 Class pyb.LCD
 +++++++++++++
@@ -170,20 +270,23 @@ Methods
 
 - lcd.command(instr_data, buf)
 
-Class pyb.CAN
-+++++++++++++
-
-Class pyb.DAC
-+++++++++++++
-
-Class pyb.ExtInt
-++++++++++++++++
-
-Class pyb.I2C
-+++++++++++++
 
 Class pyb.Pin
 +++++++++++++
+
+Methods
+#######
+
+- pin.af()
+- pin.af_list()
+- pin.gpio()
+- pin.names()
+- pin.pin()
+- pin.port()
+
+Class pyb.PinAF
++++++++++++++
+
 
 Class pyb.RTC
 +++++++++++++
@@ -194,12 +297,47 @@ Class pyb.Servo
 Class pyb.SPI
 +++++++++++++
 
+Methods
+#######
+
+- spi.deinit()
+- spi.init()
+
 Class pyb.Timer
 +++++++++++++++
 
+Methods
+#######
+
+- timer.init()
+- timer.deinit()
+- timer.callback()
+
+Class pyb.TimerChannel
++++++++++++++++
+
+Methods
+#######
+
+- timerchannel.capture()
+- timerchannel.compare()
+- timerchannel.pulse_width()
+
 Class pyb.UART
-++++++++++++++
++++++++++++++++
+
+Methods
+#######
+
+- uart.init()
+- uart.deinit()
+- uart.readchar()
+- uart.readinto()
+- uart.readline()
+- uart.sendbreak()
+
 
 Class pyb.USB_VCP
 +++++++++++++++++
+
 

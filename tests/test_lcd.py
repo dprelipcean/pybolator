@@ -24,8 +24,10 @@ for i in range(50):
     y += dy
 
     # make the dot bounce of the edges of the screen
-    if x <= 0 or x >= 127: dx = -dx
-    if y <= 0 or y >= 31: dy = -dy
+    if x <= 0 or x >= 127:
+        dx = -dx
+    if y <= 0 or y >= 31:
+        dy = -dy
 
     lcd.fill(0)                 # clear the buffer
     lcd.pixel(x, y, 1)          # draw the dot
